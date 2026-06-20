@@ -129,16 +129,25 @@ function initSettleFish() {
       y: 250 + Math.sin(angle) * r,
       vx: (Math.random()-0.5)*0.8, vy: (Math.random()-0.5)*0.8,
       trail: [], settledAt: null, leaveCooldown: 0,   // null or site.id
+      isShutdown: false, shutPH: 99,  // 후각 상실 상태 + 판정 당시 pH
       sensitivity: Math.max(0.3, Math.min(1.7, 1.0+(Math.random()+Math.random()-1.0)*0.5)),
     };
   });
 }
 
 function stepSettlement(fish, pH) {
-  const nonR = isNonResponsive(pH);
-  const noise = nonR ? 1.9 : 0.55;  // 극산성: 해류 표류 강조
-
   return fish.map(f => {
+    // ── 개체별 후각 상실(셧다운) 판정: pH가 바뀌었을 때만 다시 굴림 ──
+    let isShutdown = f.isShutdown || false;
+    let shutPH = (f.shutPH === undefined) ? 99 : f.shutPH;
+    if (Math.abs(shutPH - pH) > 0.001) {
+      const shutP = Math.min(0.98, getShutdownProbability(pH) * Math.sqrt(f.sensitivity));
+      isShutdown = Math.random() < shutP;
+      shutPH = pH;
+    }
+    // 셧다운된 개체는 후각 상실 → 표류 (노이즈 큼), 정상은 약한 노이즈
+    const noise = isShutdown ? 1.9 : 0.55;
+
     // 이미 정착한 개체: 해당 정착지 주변에서 느슨하게 배회
     if (f.settledAt !== null) {
       const site = SITES[f.settledAt];
@@ -151,16 +160,16 @@ function stepSettlement(fish, pH) {
       // 이탈 임계값 < 정착 임계값(0.35) → 히스테리시스: 한번 정착하면 안정 유지
       // 정착지가 확실히 나빠질 때(pref<0.22)만 이탈 → 무한 맴돔 방지
       const keepThresh = site.type === 'neutral' ? 0.06 : 0.22;
-      // 무반응(극산성)이면 즉시 이탈 대상, 그 외엔 선호도 기준
-      if (isNonResponsive(pH) || pref < keepThresh) {
-        // 선호도 낮을수록 이탈 확률 ↑ (최대 35%), 무반응이면 항상 최대
-        const lowFactor = isNonResponsive(pH) ? 1 : (1 - Math.max(0, pref) / keepThresh);
+      // 후각 상실(셧다운)이면 즉시 이탈 대상, 그 외엔 선호도 기준
+      if (isShutdown || pref < keepThresh) {
+        // 선호도 낮을수록 이탈 확률 ↑ (최대 35%), 셧다운이면 항상 최대
+        const lowFactor = isShutdown ? 1 : (1 - Math.max(0, pref) / keepThresh);
         const leaveProb = 0.35 * lowFactor;
         if (Math.random() < leaveProb) {
           // 정착지 바깥 방향으로 강하게 밀어냄 + 재정착 쿨다운 부여
           const outX = -dx/dist, outY = -dy/dist;
           return {
-            ...f, settledAt: null, leaveCooldown: 140,
+            ...f, settledAt: null, leaveCooldown: 140, isShutdown, shutPH,
             vx: outX * 2.0 + (Math.random()-0.5)*0.6,
             vy: outY * 2.0 + (Math.random()-0.5)*0.6,
           };
@@ -178,7 +187,7 @@ function stepSettlement(fish, pH) {
       const nx = Math.max(8, Math.min(W-8, f.x+vx));
       const ny = Math.max(8, Math.min(H-8, f.y+vy));
       const trail = [...f.trail, {x:f.x, y:f.y}].slice(-14);
-      return {...f, x:nx, y:ny, vx, vy, trail};
+      return {...f, x:nx, y:ny, vx, vy, trail, isShutdown, shutPH};
     }
 
     // 미정착 개체: 각 정착지 냄새에 반응
@@ -208,9 +217,9 @@ function stepSettlement(fish, pH) {
 
       // 정착 판정: 반경 안 + 쿨다운 종료
       if (dist < SITE_R && canSettle) {
-        if (nonR) {
-          // pH 7.6 무반응: 후각 마비로 '선택'은 못 하나, 물리적으로 우연히 머묾
-          // 어느 정착지든 도달 시 무작위 확률(2%)로 멍하니 정착 (Munday 2009: 50:50 무작위)
+        if (isShutdown) {
+          // 후각 상실: '선택'은 못 하나, 물리적으로 우연히 머묾
+          // 어느 정착지든 도달 시 무작위 확률(2%)로 멍하니 정착
           if (Math.random() < 0.02 && dist < nearestDist) {
             nearestDist = dist; nearestSettleSite = site.id;
           }
@@ -224,9 +233,9 @@ function stepSettlement(fish, pH) {
         }
       }
 
-      // 냄새 범위 내: 선호도에 따라 유인/기피 (무반응이면 유인력 0 → 표류)
+      // 냄새 범위 내: 선호도에 따라 유인/기피 (셧다운이면 유인력 0 → 표류)
       // pref(선호도)가 곧 유인력 — pH 낮으면 pref 작아져 자연히 약하게 유인됨
-      if (dist < SITE_SCENT_R && !nonR) {
+      if (dist < SITE_SCENT_R && !isShutdown) {
         const pref = getSitePreference(site.type, pH) * f.sensitivity;
         const strength = pref * 0.85 / (dist * 0.010 + 0.40);
         ax += (dx/dist) * strength;
@@ -235,7 +244,7 @@ function stepSettlement(fish, pH) {
     });
 
     if (nearestSettleSite !== null) {
-      return { ...f, settledAt: nearestSettleSite, trail: [], leaveCooldown: 0 };
+      return { ...f, settledAt: nearestSettleSite, trail: [], leaveCooldown: 0, isShutdown, shutPH };
     }
 
     // 노이즈
@@ -269,7 +278,7 @@ function stepSettlement(fish, pH) {
     const nx = Math.max(8, Math.min(W-8, f.x+vx));
     const ny = Math.max(8, Math.min(H-8, f.y+vy));
     const trail = [...f.trail, {x:f.x, y:f.y}].slice(-16);
-    return {...f, x:nx, y:ny, vx, vy, trail, leaveCooldown: cooldown};
+    return {...f, x:nx, y:ny, vx, vy, trail, leaveCooldown: cooldown, isShutdown, shutPH};
   });
 }
 
@@ -412,12 +421,16 @@ function HomingPage({ pH, onPHChange }) {
             const fAngle = Math.atan2(f.vy, f.vx)*180/Math.PI;
             const settled = f.settledAt !== null;
             const siteType = settled ? SITES[f.settledAt].type : null;
-            // 정착 여부에 따라 색 구분
-            const fishColor = settled
+            const shut = f.isShutdown && !settled;  // 미정착 + 후각상실 = 표류
+            // 정착 여부/셧다운에 따라 색 구분
+            const fishColor = shut
+              ? "hsl(220,8%,55%)"  // 셧다운: 회색 (후각 상실 표류)
+              : settled
               ? (siteType==='good'?"hsl("+hue+",78%,65%)":siteType==='bad'?"hsl(20,55%,42%)":"hsl(90,40%,48%)")
               : "hsl("+hue+",78%,56%)";
             return (
               <g key={"hf"+f.id}>
+                {shut && <circle cx={f.x} cy={f.y} r={10} fill="rgba(150,150,160,0.32)" filter="url(#hblur2)"/>}
                 {!settled && f.trail.length>1 && f.trail.map((pt,ti) => {
                   if(ti===0) return null;
                   const prev = f.trail[ti-1];
