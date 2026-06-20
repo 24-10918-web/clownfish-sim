@@ -6,7 +6,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 const W = 860, H = 500;
 const INIT_COUNT = 18;
 const ANEMONE = { x: 430, y: 250 };
-const SCENT_R = 85;   // 고정 (pH 무관 — 논문은 거리가 아니라 체류 비율 측정)
+const SCENT_R = 130;  // 회피 감지 반경 (pH 무관 — 더 일찍 도망 시작)
 
 // ── pH → 포식자 반응 bias (Munday 2009 / Dixson 2010) ────────────────────────
 function getPredatorBias(pH) {
@@ -584,10 +584,8 @@ function initPred2() {
 }
 
 function stepPred(fish, pred, pH) {
-  const nonR = isNonResponsive(pH);
-  const bias = getPredatorBias(pH);
   const latency = getReactionLatency(pH);
-  const noise = nonR?1.9:0.85+0.35*Math.max(0,bias);  // 극산성: 표류 강조
+  const noise = 0.7;  // 기본 유영 노이즈 (활발한 유영으로 구석 정체 방지)
 
   // 포식자 이동 — 전방 시야각 제한 타겟팅 (전지전능 시야 방지)
   const alive = fish.filter(f=>f.alive);
@@ -674,14 +672,14 @@ function stepPred(fish, pred, pH) {
     let ax=0,ay=0;
     // ── 긴박도(urgency): 포식자가 가까울수록 0→1로 급증 (C-start burst escape) ──
     // 냄새 반경 끝(85px)에선 거의 0, 코앞(20px 이하)에선 1에 수렴
-    const urgency = inDanger ? Math.max(0, Math.min(1, (SCENT_R - distP) / (SCENT_R - 20))) : 0;
+    const urgency = inScent ? Math.max(0, Math.min(1, (SCENT_R - distP) / (SCENT_R - 25))) : 0;
     if(canReact) {
       const ux=toPx/distP,uy=toPy/distP;
       // 역전된 개체: 포식자로 유인(+) / 정상 개체: 회피(-)
       const dir = isReversed ? +1 : -1;
       const mag = isReversed ? f.sensitivity : 1/Math.max(0.5,f.sensitivity);
       // 긴박도가 높을수록 회피/유인 힘 폭발적 증가 (1 + urgency^2 * 4배)
-      const burst = 1 + urgency*urgency*4;
+      const burst = 1 + urgency*urgency*5;  // 가까울수록 폭발적 도주
       const strength = mag*2.0/(distP*0.012+0.5) * burst;
       ax += ux*dir*strength; ay += uy*dir*strength;
     }
@@ -693,11 +691,11 @@ function stepPred(fish, pred, pH) {
     else indivNoise = noise;
     const a=Math.random()*Math.PI*2;
     ax+=Math.cos(a)*indivNoise; ay+=Math.sin(a)*indivNoise;
-    if(f.x<25)ax+=1.1;if(f.x>W-25)ax-=1.1;
-    if(f.y<25)ay+=1.1;if(f.y>H-25)ay-=1.1;
+    if(f.x<50)ax+=1.4;if(f.x>W-50)ax-=1.4;
+    if(f.y<50)ay+=1.4;if(f.y>H-50)ay-=1.4;
 
     // 긴박할수록 최대 속도 증가 (burst escape: 평소 1.1 → 최대 1.7)
-    const maxSpd = 1.1 + urgency*0.6;
+    const maxSpd = 1.1 + urgency*0.9;  // burst escape: 최대 2.0
     let vx=f.vx*0.86+ax*0.48,vy=f.vy*0.86+ay*0.48;
     const spd=Math.sqrt(vx*vx+vy*vy)+1e-6;
     if(spd>maxSpd){vx=(vx/spd)*maxSpd;vy=(vy/spd)*maxSpd;}
