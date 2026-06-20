@@ -593,10 +593,8 @@ function stepPred(fish, pred, pH) {
   const predHeading = Math.atan2(pred.vy, pred.vx);  // 포식자 진행 방향
   const HALF_FOV = (130 * Math.PI / 180) / 2;        // 시야각 130도의 절반
   alive.forEach(f=>{
-    let dx=f.x-pred.x,dy=f.y-pred.y;
-    if(dx>W/2)dx-=W;else if(dx<-W/2)dx+=W;
-    if(dy>H/2)dy-=H;else if(dy<-H/2)dy+=H;
-    const d=Math.sqrt(dx*dx+dy*dy);
+    // 포식자는 순환하지 않으므로 일반 거리로 타겟팅 (화면 가로지르기 방지)
+    const dx=f.x-pred.x,dy=f.y-pred.y,d=Math.sqrt(dx*dx+dy*dy);
     // 전방 시야각 안이거나, 아주 가까우면(50px 이내, 측면감지) 인지
     const angleToFish = Math.atan2(dy, dx);
     let diff = Math.abs(predHeading - angleToFish);
@@ -625,19 +623,21 @@ function stepPred(fish, pred, pH) {
     tgtX=PATROL[newWpIdx].x; tgtY=PATROL[newWpIdx].y;
   }
   let toFx=tgtX-pred.x,toFy=tgtY-pred.y;
-  if(hunting){ // 추적 시엔 순환 최단경로로 (순찰 웨이포인트는 그대로)
-    if(toFx>W/2)toFx-=W;else if(toFx<-W/2)toFx+=W;
-    if(toFy>H/2)toFy-=H;else if(toFy<-H/2)toFy+=H;
-  }
   const toFd=Math.sqrt(toFx*toFx+toFy*toFy)+1e-6;
   const acc=hunting?0.30:0.18;
   let pvx=pred.vx*0.88+(toFx/toFd)*PRED_SPEED*acc;
   let pvy=pred.vy*0.88+(toFy/toFd)*PRED_SPEED*acc;
+  // 화면 끝에 가까우면 안쪽으로 부드럽게 선회 (점프 없이 자연스러운 방향 전환)
+  const MARGIN=70;
+  if(pred.x<MARGIN)      pvx += (1-pred.x/MARGIN)*0.5;
+  else if(pred.x>W-MARGIN) pvx -= (1-(W-pred.x)/MARGIN)*0.5;
+  if(pred.y<MARGIN)      pvy += (1-pred.y/MARGIN)*0.5;
+  else if(pred.y>H-MARGIN) pvy -= (1-(H-pred.y)/MARGIN)*0.5;
   const pspd=Math.sqrt(pvx*pvx+pvy*pvy)+1e-6;
   if(pspd>PRED_SPEED){pvx=(pvx/pspd)*PRED_SPEED;pvy=(pvy/pspd)*PRED_SPEED;}
-  let pnx=pred.x+pvx, pny=pred.y+pvy;
-  if(pnx<0)pnx+=W;else if(pnx>=W)pnx-=W;  // 순환 (벽 튕김 없음)
-  if(pny<0)pny+=H;else if(pny>=H)pny-=H;
+  // 포식자는 순환하지 않음 — 화면 안에 부드럽게 머묾 (안전 클램프)
+  let pnx=Math.max(8,Math.min(W-8,pred.x+pvx));
+  let pny=Math.max(8,Math.min(H-8,pred.y+pvy));
   const newPred={x:pnx,y:pny,vx:pvx,vy:pvy,waypointIdx:newWpIdx,hunting};
 
   // 물고기 이동
