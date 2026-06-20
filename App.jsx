@@ -866,6 +866,17 @@ function PredatorPage({ pH, onPHChange }) {
                 :"rgba(60,200,110,0.45)")
                 :"none");
             const showGlow = f.alive && (f.isShutdown || f.inScent);
+            // 몸통 색도 상태별로 구분 (글로우와 함께 상태가 또렷이 보이게)
+            // 셧다운=회색 / 역전(반응중)=빨강 / 그 외=기본 주황
+            const bodyMain = f.isShutdown ? "hsl(220,8%,58%)"
+              : (f.inScent && f.isReversed && f.latencyCounter===0) ? "hsl(2,75%,58%)"
+              : "hsl("+hue+",78%,56%)";
+            const bodyTail = f.isShutdown ? "hsl(220,8%,42%)"
+              : (f.inScent && f.isReversed && f.latencyCounter===0) ? "hsl(2,60%,44%)"
+              : "hsl("+hue+",66%,44%)";
+            const trailHue = f.isShutdown ? "220,8%,55%"
+              : (f.inScent && f.isReversed && f.latencyCounter===0) ? "2,70%,56%"
+              : hue+",76%,58%";
             return (
               <g key={"pf"+f.id} opacity={op}>
                 {showGlow&&<circle cx={f.x} cy={f.y} r={13} fill={glowFill} filter="url(#pblur2)"/>}
@@ -874,15 +885,15 @@ function PredatorPage({ pH, onPHChange }) {
                   const prev=f.trail[ti-1];
                   const alpha=(ti/f.trail.length)*0.30;
                   return <line key={"ptr"+ti} x1={prev.x} y1={prev.y} x2={pt.x} y2={pt.y}
-                    stroke={"hsla("+hue+",76%,58%,"+alpha+")"} strokeWidth="1.1" strokeLinecap="round"/>;
+                    stroke={"hsla("+trailHue+","+alpha+")"} strokeWidth="1.1" strokeLinecap="round"/>;
                 })}
                 {!f.alive&&<circle cx={f.x} cy={f.y} r={7} fill={"rgba(255,85,35,"+(f.deathFlash/22*0.5)+")"}/>}
                 <g transform={"translate("+f.x+","+f.y+") rotate("+(f.alive?fAngle:90)+")"}>
                   {f.alive?(
                     <>
-                      <ellipse rx="4.5" ry="2.6" fill={"hsl("+hue+",78%,56%)"}/>
+                      <ellipse rx="4.5" ry="2.6" fill={bodyMain}/>
                       <ellipse rx="1.2" ry="2.4" cx="0.4" fill="white" opacity="0.46"/>
-                      <polygon points="-4.5,0 -9.5,-2.5 -9.5,2.5" fill={"hsl("+hue+",66%,44%)"}/>
+                      <polygon points="-4.5,0 -9.5,-2.5 -9.5,2.5" fill={bodyTail}/>
                       <circle cx="2.5" cy="-1" r="1.2" fill="#0a0808"/>
                       <circle cx="2.8" cy="-1.3" r="0.5" fill="white"/>
                     </>
