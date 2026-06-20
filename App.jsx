@@ -30,13 +30,16 @@ function getReactionLatency(pH) {
 function isNonResponsive(pH) { return pH <= 7.62; }
 
 // ── pH → GABA-A 역전 확률 (Dixson 2010: pH 7.8에서 다수 개체가 역전) ──────────
-// 개체군 내에서 포식자 냄새에 끌리도록 역전된 개체의 비율
-// pH 8.0+ : 0% (정상) / pH 7.8 : ~70% / pH 7.6 : 신경계 셧다운(역전 무의미)
+// 개체군 내에서 포식자 냄새에 끌리도록 역전된 개체의 비율.
+// 역전은 후각이 살아있어야 가능 → pH 7.7 부근에서 정점 후, 더 낮아지면
+// 후각 마비(셧다운)가 늘어 역전 가능 개체가 오히려 감소한다.
+// pH 8.0+ : 0% / pH 7.8 : 70% / pH 7.7 : 75%(정점) / pH 7.6 : 30%
 function getReversalProbability(pH) {
   if (pH >= 8.00) return 0.0;
-  if (pH >= 7.80) { const t = (pH-7.80)/(8.00-7.80); return 0.0*t + 0.70*(1-t); }
-  if (pH >= 7.62) { const t = (pH-7.62)/(7.80-7.62); return 0.70*t + 0.95*(1-t); }
-  return 0.0;
+  if (pH >= 7.80) { const t = (pH-7.80)/(8.00-7.80); return 0.0*t + 0.70*(1-t); }   // 상승
+  if (pH >= 7.70) { const t = (pH-7.70)/(7.80-7.70); return 0.70*t + 0.75*(1-t); }  // 정점
+  if (pH >= 7.60) { const t = (pH-7.60)/(7.70-7.60); return 0.75*t + 0.30*(1-t); }  // 감소
+  return 0.15; // 극산성: 대부분 셧다운, 소수만 역전
 }
 
 // ── pH → 후각 상실(셧다운) 확률 (Munday 2009: pH 7.6에서 후각 마비) ──────────
@@ -669,25 +672,35 @@ function stepPred(fish, pred, pH) {
     const canReact = inDanger && latencyCounter===0 && !isShutdown;
 
     let ax=0,ay=0;
-    if(canReact) {  // canReact에 이미 !isShutdown 포함 (개체별 판정)
+    // ── 긴박도(urgency): 포식자가 가까울수록 0→1로 급증 (C-start burst escape) ──
+    // 냄새 반경 끝(85px)에선 거의 0, 코앞(20px 이하)에선 1에 수렴
+    const urgency = inDanger ? Math.max(0, Math.min(1, (SCENT_R - distP) / (SCENT_R - 20))) : 0;
+    if(canReact) {
       const ux=toPx/distP,uy=toPy/distP;
       // 역전된 개체: 포식자로 유인(+) / 정상 개체: 회피(-)
-      // 감수성으로 반응 강도 조절 (정상은 민감할수록 빨리 도망, 역전은 더 강하게 끌림)
       const dir = isReversed ? +1 : -1;
       const mag = isReversed ? f.sensitivity : 1/Math.max(0.5,f.sensitivity);
-      const strength = mag*2.0/(distP*0.012+0.5);
+      // 긴박도가 높을수록 회피/유인 힘 폭발적 증가 (1 + urgency^2 * 4배)
+      const burst = 1 + urgency*urgency*4;
+      const strength = mag*2.0/(distP*0.012+0.5) * burst;
       ax += ux*dir*strength; ay += uy*dir*strength;
     }
-    // 셧다운 개체는 노이즈 증가 → 해류 표류 강조
-    const indivNoise = isShutdown ? 1.9 : noise;
+    // ── 노이즈: 위험 반응 중엔 대폭 감소 → 회피 방향이 노이즈에 묻히지 않음 ──
+    // 셧다운=표류(큰 노이즈) / 반응 중=긴박할수록 노이즈 억제 / 평상시=기본
+    let indivNoise;
+    if(isShutdown) indivNoise = 1.9;
+    else if(canReact) indivNoise = noise * (1 - urgency*0.85);  // 긴박할수록 직진
+    else indivNoise = noise;
     const a=Math.random()*Math.PI*2;
     ax+=Math.cos(a)*indivNoise; ay+=Math.sin(a)*indivNoise;
     if(f.x<25)ax+=1.1;if(f.x>W-25)ax-=1.1;
     if(f.y<25)ay+=1.1;if(f.y>H-25)ay-=1.1;
 
+    // 긴박할수록 최대 속도 증가 (burst escape: 평소 1.1 → 최대 1.7)
+    const maxSpd = 1.1 + urgency*0.6;
     let vx=f.vx*0.86+ax*0.48,vy=f.vy*0.86+ay*0.48;
     const spd=Math.sqrt(vx*vx+vy*vy)+1e-6;
-    if(spd>1.1){vx=(vx/spd)*1.1;vy=(vy/spd)*1.1;}
+    if(spd>maxSpd){vx=(vx/spd)*maxSpd;vy=(vy/spd)*maxSpd;}
     const nx=Math.max(8,Math.min(W-8,f.x+vx));
     const ny=Math.max(8,Math.min(H-8,f.y+vy));
     const trail=[...f.trail,{x:f.x,y:f.y}].slice(-16);
