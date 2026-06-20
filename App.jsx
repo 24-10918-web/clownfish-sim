@@ -593,7 +593,10 @@ function stepPred(fish, pred, pH) {
   const predHeading = Math.atan2(pred.vy, pred.vx);  // 포식자 진행 방향
   const HALF_FOV = (130 * Math.PI / 180) / 2;        // 시야각 130도의 절반
   alive.forEach(f=>{
-    const dx=f.x-pred.x,dy=f.y-pred.y,d=Math.sqrt(dx*dx+dy*dy);
+    let dx=f.x-pred.x,dy=f.y-pred.y;
+    if(dx>W/2)dx-=W;else if(dx<-W/2)dx+=W;
+    if(dy>H/2)dy-=H;else if(dy<-H/2)dy+=H;
+    const d=Math.sqrt(dx*dx+dy*dy);
     // 전방 시야각 안이거나, 아주 가까우면(50px 이내, 측면감지) 인지
     const angleToFish = Math.atan2(dy, dx);
     let diff = Math.abs(predHeading - angleToFish);
@@ -621,22 +624,29 @@ function stepPred(fish, pred, pH) {
     if(Math.sqrt(wdx*wdx+wdy*wdy)<28) newWpIdx=(pred.waypointIdx+1)%PATROL.length;
     tgtX=PATROL[newWpIdx].x; tgtY=PATROL[newWpIdx].y;
   }
-  const toFx=tgtX-pred.x,toFy=tgtY-pred.y,toFd=Math.sqrt(toFx*toFx+toFy*toFy)+1e-6;
+  let toFx=tgtX-pred.x,toFy=tgtY-pred.y;
+  if(hunting){ // 추적 시엔 순환 최단경로로 (순찰 웨이포인트는 그대로)
+    if(toFx>W/2)toFx-=W;else if(toFx<-W/2)toFx+=W;
+    if(toFy>H/2)toFy-=H;else if(toFy<-H/2)toFy+=H;
+  }
+  const toFd=Math.sqrt(toFx*toFx+toFy*toFy)+1e-6;
   const acc=hunting?0.30:0.18;
   let pvx=pred.vx*0.88+(toFx/toFd)*PRED_SPEED*acc;
   let pvy=pred.vy*0.88+(toFy/toFd)*PRED_SPEED*acc;
   const pspd=Math.sqrt(pvx*pvx+pvy*pvy)+1e-6;
   if(pspd>PRED_SPEED){pvx=(pvx/pspd)*PRED_SPEED;pvy=(pvy/pspd)*PRED_SPEED;}
-  let pnx=Math.max(20,Math.min(W-20,pred.x+pvx));
-  let pny=Math.max(20,Math.min(H-20,pred.y+pvy));
-  if(pred.x+pvx<20||pred.x+pvx>W-20) pvx*=-1;
-  if(pred.y+pvy<20||pred.y+pvy>H-20) pvy*=-1;
+  let pnx=pred.x+pvx, pny=pred.y+pvy;
+  if(pnx<0)pnx+=W;else if(pnx>=W)pnx-=W;  // 순환 (벽 튕김 없음)
+  if(pny<0)pny+=H;else if(pny>=H)pny-=H;
   const newPred={x:pnx,y:pny,vx:pvx,vy:pvy,waypointIdx:newWpIdx,hunting};
 
   // 물고기 이동
   const newFish = fish.map(f=>{
     if(!f.alive) return {...f,deathFlash:Math.max(0,f.deathFlash-1)};
-    const toPx=newPred.x-f.x,toPy=newPred.y-f.y;
+    // 순환(wrap-around) 거리: 화면 경계를 넘어가는 경로가 더 짧으면 그쪽으로 계산
+    let toPx=newPred.x-f.x, toPy=newPred.y-f.y;
+    if(toPx > W/2) toPx-=W; else if(toPx < -W/2) toPx+=W;
+    if(toPy > H/2) toPy-=H; else if(toPy < -H/2) toPy+=H;
     const distP=Math.sqrt(toPx*toPx+toPy*toPy)+1e-6;
     if(distP<CATCH_R) return {...f,alive:false,deathFlash:22,vx:0,vy:0};
 
@@ -674,28 +684,14 @@ function stepPred(fish, pred, pH) {
     // 냄새 반경 끝(85px)에선 거의 0, 코앞(20px 이하)에선 1에 수렴
     const urgency = inScent ? Math.max(0, Math.min(1, (SCENT_R - distP) / (SCENT_R - 25))) : 0;
     if(canReact) {
-      const ux=toPx/distP,uy=toPy/distP;  // 포식자 → 나 방향(회피 기본축)
+      const ux=toPx/distP,uy=toPy/distP;  // 포식자 → 나 방향
+      // 역전: 포식자로 직진(+) / 정상: 정반대로 회피(-)
+      // (화면이 순환 구조라 벽이 없으므로 단순 회피로 충분)
       const dir = isReversed ? +1 : -1;
       const mag = isReversed ? f.sensitivity : 1/Math.max(0.5,f.sensitivity);
       const burst = 1 + urgency*urgency*5;  // 가까울수록 폭발적 도주
       const strength = mag*2.0/(distP*0.012+0.5) * burst;
-      // 정상 회피: 벽에 가까우면 정반대 직진 대신 '옆으로 돌아' 피함(접선 성분)
-      // → 포식자 반대편 벽에 다 같이 박히는 문제 방지
-      if(!isReversed){
-        // 화면 중앙으로 향하는 정도(벽 근처일수록 큼)
-        const toCx=(W/2 - f.x)/(W/2), toCy=(H/2 - f.y)/(H/2);
-        const nearWall = Math.max(Math.abs(f.x-W/2)/(W/2), Math.abs(f.y-H/2)/(H/2));
-        // 접선 방향(포식자축에 수직) = 옆으로 빠지기
-        const tnx=-uy, tny=ux;
-        // 접선 부호: 중앙 쪽을 향하는 쪽으로 선택
-        const sgn = (tnx*toCx + tny*toCy) >= 0 ? 1 : -1;
-        const tanW = nearWall*nearWall*0.8;  // 벽에 가까울수록 옆돌기 강화
-        ax += (ux*dir*(1-tanW) + tnx*sgn*tanW) * strength;
-        ay += (uy*dir*(1-tanW) + tny*sgn*tanW) * strength;
-      } else {
-        // 역전: 그대로 포식자로 직진
-        ax += ux*dir*strength; ay += uy*dir*strength;
-      }
+      ax += ux*dir*strength; ay += uy*dir*strength;
     }
     // ── 노이즈: 위험 반응 중엔 대폭 감소 → 회피 방향이 노이즈에 묻히지 않음 ──
     let indivNoise;
@@ -704,19 +700,20 @@ function stepPred(fish, pred, pH) {
     else indivNoise = noise;
     const a=Math.random()*Math.PI*2;
     ax+=Math.cos(a)*indivNoise; ay+=Math.sin(a)*indivNoise;
-    // 벽 반발: 긴박도에 비례해 강화 (도망치다 벽에 박혀도 밀려남)
-    const wallF = 1.4 + urgency*2.5;
-    if(f.x<50)ax+=wallF; if(f.x>W-50)ax-=wallF;
-    if(f.y<50)ay+=wallF; if(f.y>H-50)ay-=wallF;
+    // (벽 반발 없음 — 화면이 순환 구조)
 
-    // 긴박할수록 최대 속도 증가 (burst escape: 평소 1.1 → 최대 1.7)
-    const maxSpd = 1.1 + urgency*0.9;  // burst escape: 최대 2.0
+    // 긴박할수록 최대 속도 증가 (burst escape: 평소 1.1 → 최대 2.0)
+    const maxSpd = 1.1 + urgency*0.9;
     let vx=f.vx*0.86+ax*0.48,vy=f.vy*0.86+ay*0.48;
     const spd=Math.sqrt(vx*vx+vy*vy)+1e-6;
     if(spd>maxSpd){vx=(vx/spd)*maxSpd;vy=(vy/spd)*maxSpd;}
-    const nx=Math.max(8,Math.min(W-8,f.x+vx));
-    const ny=Math.max(8,Math.min(H-8,f.y+vy));
-    const trail=[...f.trail,{x:f.x,y:f.y}].slice(-16);
+    // 순환 위치: 한쪽 벽을 넘으면 반대편으로 재등장 (wrap-around)
+    let nx=f.x+vx, ny=f.y+vy;
+    if(nx<0) nx+=W; else if(nx>=W) nx-=W;
+    if(ny<0) ny+=H; else if(ny>=H) ny-=H;
+    // 화면을 가로질러 순간이동할 때 잔상(trail)이 길게 늘어지지 않도록 처리
+    const wrapped = Math.abs(nx-f.x)>W/2 || Math.abs(ny-f.y)>H/2;
+    const trail = wrapped ? [] : [...f.trail,{x:f.x,y:f.y}].slice(-16);
     return {...f,x:nx,y:ny,vx,vy,trail,inScent,latencyCounter,inDanger,isReversed,isShutdown,shutPH,deathFlash:Math.max(0,f.deathFlash-1)};
   });
   return {fish:newFish,pred:newPred};
