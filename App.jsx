@@ -570,6 +570,7 @@ function initPredFish() {
       vx:(Math.random()-0.5)*0.9, vy:(Math.random()-0.5)*0.9,
       trail:[], alive:true, deathFlash:0,
       latencyCounter:0, inDanger:false,
+      isShutdown:false, isReversed:false, shutPH:99,  // 후각상실/역전 상태 + 판정 당시 pH
       sensitivity:Math.max(0.3,Math.min(1.7,1.0+(Math.random()+Math.random()-1.0)*0.55)),
     };
   });
@@ -639,25 +640,28 @@ function stepPred(fish, pred, pH) {
     if(distP<CATCH_R) return {...f,alive:false,deathFlash:22,vx:0,vy:0};
 
     const inScent=distP<SCENT_R;
-    // 반응 지연 처리 + GABA 역전 확률 판정
-    let latencyCounter=f.latencyCounter;
-    let inDanger=f.inDanger;
-    let isReversed=f.isReversed||false;  // 이 개체가 역전됐는지 (개체에 고정)
-    let isShutdown=f.isShutdown||false;  // 이 개체가 후각 상실됐는지 (개체에 고정)
-    if(inScent && !inDanger){
-      inDanger=true; latencyCounter=latency; // 위험 감지 시 지연 카운터 시작
-      // ★ 셧다운 판정 먼저: 감수성 높을수록 더 잘 상실 (후각 마비)
+    let isReversed=f.isReversed||false;  // 역전 상태 (개체에 고정)
+    let isShutdown=f.isShutdown||false;  // 후각 상실 상태 (개체에 고정)
+    let shutPH=(f.shutPH===undefined)?99:f.shutPH;
+    // ★ pH가 바뀌었을 때 전 개체가 즉시 셧다운/역전 판정 (포식자 위치 무관)
+    if(Math.abs(shutPH - pH) > 0.001){
       const shutP = Math.min(0.98, getShutdownProbability(pH) * Math.sqrt(f.sensitivity));
       isShutdown = Math.random() < shutP;
-      // ★ 셧다운 안 된 개체만 역전 판정 (상실되면 역전도 무의미)
       if(!isShutdown){
         const revP = Math.min(0.98, getReversalProbability(pH) * Math.sqrt(f.sensitivity));
         isReversed = Math.random() < revP;
       } else {
         isReversed = false;
       }
+      shutPH = pH;
+    }
+    // 반응 지연 처리 (위험 감지 시점에 latency 카운터만 다룸)
+    let latencyCounter=f.latencyCounter;
+    let inDanger=f.inDanger;
+    if(inScent && !inDanger){
+      inDanger=true; latencyCounter=latency;
     } else if(!inScent){
-      inDanger=false; latencyCounter=0; isReversed=false; isShutdown=false; // 위험 벗어나면 초기화
+      inDanger=false; latencyCounter=0;
     } else if(latencyCounter>0){
       latencyCounter--;
     }
@@ -665,7 +669,7 @@ function stepPred(fish, pred, pH) {
     const canReact = inDanger && latencyCounter===0 && !isShutdown;
 
     let ax=0,ay=0;
-    if(!nonR && canReact) {
+    if(canReact) {  // canReact에 이미 !isShutdown 포함 (개체별 판정)
       const ux=toPx/distP,uy=toPy/distP;
       // 역전된 개체: 포식자로 유인(+) / 정상 개체: 회피(-)
       // 감수성으로 반응 강도 조절 (정상은 민감할수록 빨리 도망, 역전은 더 강하게 끌림)
@@ -687,7 +691,7 @@ function stepPred(fish, pred, pH) {
     const nx=Math.max(8,Math.min(W-8,f.x+vx));
     const ny=Math.max(8,Math.min(H-8,f.y+vy));
     const trail=[...f.trail,{x:f.x,y:f.y}].slice(-16);
-    return {...f,x:nx,y:ny,vx,vy,trail,inScent,latencyCounter,inDanger,isReversed,isShutdown,deathFlash:Math.max(0,f.deathFlash-1)};
+    return {...f,x:nx,y:ny,vx,vy,trail,inScent,latencyCounter,inDanger,isReversed,isShutdown,shutPH,deathFlash:Math.max(0,f.deathFlash-1)};
   });
   return {fish:newFish,pred:newPred};
 }
@@ -829,16 +833,19 @@ function PredatorPage({ pH, onPHChange }) {
             const hue=15+(fi%10)*11;
             const fAngle=Math.atan2(f.vy,f.vx)*180/Math.PI;
             const op=f.alive?1:(f.deathFlash/22)*0.7;
-            // 글로우 색: 셧다운=회색(후각상실) / 지연중=노랑 / 역전=빨강(유인) / 정상=초록(회피)
-            const glowFill=f.alive&&f.inScent
-              ?(f.isShutdown?"rgba(150,150,160,0.40)"
-              :f.latencyCounter>0?"rgba(220,200,50,0.55)"
-              :f.isReversed?"rgba(220,80,80,0.62)"
-              :"rgba(60,200,110,0.45)")
-              :"none";
+            // 셧다운 개체는 포식자 위치 무관하게 항상 회색 글로우 (후각 상실 표류)
+            // 그 외(정상/역전/지연)는 냄새 범위 안에서만 글로우
+            const glowFill = f.alive && f.isShutdown
+              ? "rgba(150,150,160,0.40)"
+              : (f.alive && f.inScent
+                ?(f.latencyCounter>0?"rgba(220,200,50,0.55)"
+                :f.isReversed?"rgba(220,80,80,0.62)"
+                :"rgba(60,200,110,0.45)")
+                :"none");
+            const showGlow = f.alive && (f.isShutdown || f.inScent);
             return (
               <g key={"pf"+f.id} opacity={op}>
-                {f.alive&&f.inScent&&<circle cx={f.x} cy={f.y} r={13} fill={glowFill} filter="url(#pblur2)"/>}
+                {showGlow&&<circle cx={f.x} cy={f.y} r={13} fill={glowFill} filter="url(#pblur2)"/>}
                 {f.alive&&f.trail.length>1&&f.trail.map((pt,ti)=>{
                   if(ti===0) return null;
                   const prev=f.trail[ti-1];
