@@ -84,8 +84,8 @@ function getSitePreference(siteType, pH) {
   if (nonR) return 0;
   if (siteType === 'good') {
     if (pH >= 8.00) return 1.0;
-    if (pH >= 7.80) { const t=(pH-7.80)/(8.00-7.80); return 1.0*t + 0.30*(1-t); }
-    if (pH >= 7.60) { const t=(pH-7.60)/(7.80-7.60); return 0.30*t + 0.0*(1-t); }
+    if (pH >= 7.80) { const t=(pH-7.80)/(8.00-7.80); return 1.0*t + 0.55*(1-t); }  // pH7.8: 약해지나 유지
+    if (pH >= 7.60) { const t=(pH-7.60)/(7.80-7.60); return 0.55*t + 0.0*(1-t); }
     return 0;
   }
   if (siteType === 'bad') {
@@ -128,8 +128,9 @@ function stepSettlement(fish, pH) {
       // 이탈 판정엔 sensitivity 영향 완화 (sqrt) → 민감도 높은 개체도 빠져나옴
       const basePref = getSitePreference(site.type, pH);
       const pref = basePref * Math.sqrt(f.sensitivity);
-      // 정착 유지 임계값 상향 (good/bad 0.40) → pH 발현 시 확실히 이탈
-      const keepThresh = site.type === 'neutral' ? 0.10 : 0.40;
+      // 이탈 임계값 < 정착 임계값(0.35) → 히스테리시스: 한번 정착하면 안정 유지
+      // 정착지가 확실히 나빠질 때(pref<0.22)만 이탈 → 무한 맴돔 방지
+      const keepThresh = site.type === 'neutral' ? 0.06 : 0.22;
       // 무반응(극산성)이면 즉시 이탈 대상, 그 외엔 선호도 기준
       if (isNonResponsive(pH) || pref < keepThresh) {
         // 선호도 낮을수록 이탈 확률 ↑ (최대 35%), 무반응이면 항상 최대
@@ -194,7 +195,8 @@ function stepSettlement(fish, pH) {
             nearestDist = dist; nearestSettleSite = site.id;
           }
         } else {
-          const pref = getSitePreference(site.type, pH) * f.sensitivity;
+          // 정착 판정도 √sensitivity로 (이탈 판정과 동일 척도 → 무한 맴돔 방지)
+          const pref = getSitePreference(site.type, pH) * Math.sqrt(f.sensitivity);
           const settleThresh = site.type === 'neutral' ? 0.10 : 0.35;
           if (pref > settleThresh && dist < nearestDist) {
             nearestDist = dist; nearestSettleSite = site.id;
