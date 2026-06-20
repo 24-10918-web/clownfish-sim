@@ -674,25 +674,40 @@ function stepPred(fish, pred, pH) {
     // 냄새 반경 끝(85px)에선 거의 0, 코앞(20px 이하)에선 1에 수렴
     const urgency = inScent ? Math.max(0, Math.min(1, (SCENT_R - distP) / (SCENT_R - 25))) : 0;
     if(canReact) {
-      const ux=toPx/distP,uy=toPy/distP;
-      // 역전된 개체: 포식자로 유인(+) / 정상 개체: 회피(-)
+      const ux=toPx/distP,uy=toPy/distP;  // 포식자 → 나 방향(회피 기본축)
       const dir = isReversed ? +1 : -1;
       const mag = isReversed ? f.sensitivity : 1/Math.max(0.5,f.sensitivity);
-      // 긴박도가 높을수록 회피/유인 힘 폭발적 증가 (1 + urgency^2 * 4배)
       const burst = 1 + urgency*urgency*5;  // 가까울수록 폭발적 도주
       const strength = mag*2.0/(distP*0.012+0.5) * burst;
-      ax += ux*dir*strength; ay += uy*dir*strength;
+      // 정상 회피: 벽에 가까우면 정반대 직진 대신 '옆으로 돌아' 피함(접선 성분)
+      // → 포식자 반대편 벽에 다 같이 박히는 문제 방지
+      if(!isReversed){
+        // 화면 중앙으로 향하는 정도(벽 근처일수록 큼)
+        const toCx=(W/2 - f.x)/(W/2), toCy=(H/2 - f.y)/(H/2);
+        const nearWall = Math.max(Math.abs(f.x-W/2)/(W/2), Math.abs(f.y-H/2)/(H/2));
+        // 접선 방향(포식자축에 수직) = 옆으로 빠지기
+        const tnx=-uy, tny=ux;
+        // 접선 부호: 중앙 쪽을 향하는 쪽으로 선택
+        const sgn = (tnx*toCx + tny*toCy) >= 0 ? 1 : -1;
+        const tanW = nearWall*nearWall*0.8;  // 벽에 가까울수록 옆돌기 강화
+        ax += (ux*dir*(1-tanW) + tnx*sgn*tanW) * strength;
+        ay += (uy*dir*(1-tanW) + tny*sgn*tanW) * strength;
+      } else {
+        // 역전: 그대로 포식자로 직진
+        ax += ux*dir*strength; ay += uy*dir*strength;
+      }
     }
     // ── 노이즈: 위험 반응 중엔 대폭 감소 → 회피 방향이 노이즈에 묻히지 않음 ──
-    // 셧다운=표류(큰 노이즈) / 반응 중=긴박할수록 노이즈 억제 / 평상시=기본
     let indivNoise;
     if(isShutdown) indivNoise = 1.9;
-    else if(canReact) indivNoise = noise * (1 - urgency*0.85);  // 긴박할수록 직진
+    else if(canReact) indivNoise = noise * (1 - urgency*0.85);
     else indivNoise = noise;
     const a=Math.random()*Math.PI*2;
     ax+=Math.cos(a)*indivNoise; ay+=Math.sin(a)*indivNoise;
-    if(f.x<50)ax+=1.4;if(f.x>W-50)ax-=1.4;
-    if(f.y<50)ay+=1.4;if(f.y>H-50)ay-=1.4;
+    // 벽 반발: 긴박도에 비례해 강화 (도망치다 벽에 박혀도 밀려남)
+    const wallF = 1.4 + urgency*2.5;
+    if(f.x<50)ax+=wallF; if(f.x>W-50)ax-=wallF;
+    if(f.y<50)ay+=wallF; if(f.y>H-50)ay-=wallF;
 
     // 긴박할수록 최대 속도 증가 (burst escape: 평소 1.1 → 최대 1.7)
     const maxSpd = 1.1 + urgency*0.9;  // burst escape: 최대 2.0
