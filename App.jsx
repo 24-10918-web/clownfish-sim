@@ -29,6 +29,26 @@ function getReactionLatency(pH) {
 
 function isNonResponsive(pH) { return pH <= 7.62; }
 
+// ── pH → GABA-A 역전 확률 (Dixson 2010: pH 7.8에서 다수 개체가 역전) ──────────
+// 개체군 내에서 포식자 냄새에 끌리도록 역전된 개체의 비율
+// pH 8.0+ : 0% (정상) / pH 7.8 : ~70% / pH 7.6 : 신경계 셧다운(역전 무의미)
+function getReversalProbability(pH) {
+  if (pH >= 8.00) return 0.0;
+  if (pH >= 7.80) { const t = (pH-7.80)/(8.00-7.80); return 0.0*t + 0.70*(1-t); }
+  if (pH >= 7.62) { const t = (pH-7.62)/(7.80-7.62); return 0.70*t + 0.95*(1-t); }
+  return 0.0;
+}
+
+// ── pH → 후각 상실(셧다운) 확률 (Munday 2009: pH 7.6에서 후각 마비) ──────────
+// 개체군 내에서 후각을 완전히 잃고 해류에 표류하는 개체의 비율
+// pH 7.75+ : 0% / pH 7.70 : ~20% / pH 7.65 : ~55% / pH 7.60 : ~90%
+function getShutdownProbability(pH) {
+  if (pH >= 7.75) return 0.0;
+  if (pH >= 7.70) { const t = (pH-7.70)/(7.75-7.70); return 0.0*t + 0.20*(1-t); }
+  if (pH >= 7.60) { const t = (pH-7.60)/(7.70-7.60); return 0.20*t + 0.90*(1-t); }
+  return 0.95; // pH 7.6 미만: 거의 전부 셧다운
+}
+
 // ── 노출 기간 효과 (Munday 2009: pH 7.8 노출 후 2~4일 뒤 행동 역전) ──────────
 // 유효 pH = 노출일수에 따라 실제 pH 효과가 점진적으로 발현되는 pH 값.
 // 노출 0일: 정상(8.15)에 가까움 → 시간 지날수록 설정 pH로 수렴.
@@ -606,27 +626,45 @@ function stepPred(fish, pred, pH) {
     if(distP<CATCH_R) return {...f,alive:false,deathFlash:22,vx:0,vy:0};
 
     const inScent=distP<SCENT_R;
-    // 반응 지연 처리
+    // 반응 지연 처리 + GABA 역전 확률 판정
     let latencyCounter=f.latencyCounter;
     let inDanger=f.inDanger;
+    let isReversed=f.isReversed||false;  // 이 개체가 역전됐는지 (개체에 고정)
+    let isShutdown=f.isShutdown||false;  // 이 개체가 후각 상실됐는지 (개체에 고정)
     if(inScent && !inDanger){
       inDanger=true; latencyCounter=latency; // 위험 감지 시 지연 카운터 시작
+      // ★ 셧다운 판정 먼저: 감수성 높을수록 더 잘 상실 (후각 마비)
+      const shutP = Math.min(0.98, getShutdownProbability(pH) * Math.sqrt(f.sensitivity));
+      isShutdown = Math.random() < shutP;
+      // ★ 셧다운 안 된 개체만 역전 판정 (상실되면 역전도 무의미)
+      if(!isShutdown){
+        const revP = Math.min(0.98, getReversalProbability(pH) * Math.sqrt(f.sensitivity));
+        isReversed = Math.random() < revP;
+      } else {
+        isReversed = false;
+      }
     } else if(!inScent){
-      inDanger=false; latencyCounter=0;
+      inDanger=false; latencyCounter=0; isReversed=false; isShutdown=false; // 위험 벗어나면 초기화
     } else if(latencyCounter>0){
       latencyCounter--;
     }
-    const canReact = inDanger && latencyCounter===0; // 지연 끝나야 반응
+    // 셧다운된 개체는 반응 불가 (지연과 무관하게 무반응)
+    const canReact = inDanger && latencyCounter===0 && !isShutdown;
 
     let ax=0,ay=0;
     if(!nonR && canReact) {
       const ux=toPx/distP,uy=toPy/distP;
-      const effBias=bias>=0?bias*f.sensitivity:bias/Math.max(0.5,f.sensitivity);
-      const strength=Math.abs(effBias)*2.0/(distP*0.012+0.5);
-      ax+=ux*effBias*strength; ay+=uy*effBias*strength;
+      // 역전된 개체: 포식자로 유인(+) / 정상 개체: 회피(-)
+      // 감수성으로 반응 강도 조절 (정상은 민감할수록 빨리 도망, 역전은 더 강하게 끌림)
+      const dir = isReversed ? +1 : -1;
+      const mag = isReversed ? f.sensitivity : 1/Math.max(0.5,f.sensitivity);
+      const strength = mag*2.0/(distP*0.012+0.5);
+      ax += ux*dir*strength; ay += uy*dir*strength;
     }
+    // 셧다운 개체는 노이즈 증가 → 해류 표류 강조
+    const indivNoise = isShutdown ? 1.9 : noise;
     const a=Math.random()*Math.PI*2;
-    ax+=Math.cos(a)*noise; ay+=Math.sin(a)*noise;
+    ax+=Math.cos(a)*indivNoise; ay+=Math.sin(a)*indivNoise;
     if(f.x<25)ax+=1.1;if(f.x>W-25)ax-=1.1;
     if(f.y<25)ay+=1.1;if(f.y>H-25)ay-=1.1;
 
@@ -636,7 +674,7 @@ function stepPred(fish, pred, pH) {
     const nx=Math.max(8,Math.min(W-8,f.x+vx));
     const ny=Math.max(8,Math.min(H-8,f.y+vy));
     const trail=[...f.trail,{x:f.x,y:f.y}].slice(-16);
-    return {...f,x:nx,y:ny,vx,vy,trail,inScent,latencyCounter,inDanger,deathFlash:Math.max(0,f.deathFlash-1)};
+    return {...f,x:nx,y:ny,vx,vy,trail,inScent,latencyCounter,inDanger,isReversed,isShutdown,deathFlash:Math.max(0,f.deathFlash-1)};
   });
   return {fish:newFish,pred:newPred};
 }
@@ -778,13 +816,12 @@ function PredatorPage({ pH, onPHChange }) {
             const hue=15+(fi%10)*11;
             const fAngle=Math.atan2(f.vy,f.vx)*180/Math.PI;
             const op=f.alive?1:(f.deathFlash/22)*0.7;
-            const effBias=(!isNonResponsive(effPH)&&bias>=0)?bias*f.sensitivity:(!isNonResponsive(effPH)&&bias<0)?bias/Math.max(0.5,f.sensitivity):0;
-            // 지연 중인 개체: 노란 글로우
+            // 글로우 색: 셧다운=회색(후각상실) / 지연중=노랑 / 역전=빨강(유인) / 정상=초록(회피)
             const glowFill=f.alive&&f.inScent
-              ?(f.latencyCounter>0?"rgba(220,200,50,0.55)"
-              :effBias>0.1?"rgba(220,80,80,"+(0.3+effBias*0.4)+")"
-              :effBias<-0.1?"rgba(60,200,110,0.42)"
-              :"rgba(190,170,60,0.35)")
+              ?(f.isShutdown?"rgba(150,150,160,0.40)"
+              :f.latencyCounter>0?"rgba(220,200,50,0.55)"
+              :f.isReversed?"rgba(220,80,80,0.62)"
+              :"rgba(60,200,110,0.45)")
               :"none";
             return (
               <g key={"pf"+f.id} opacity={op}>
@@ -937,8 +974,8 @@ function PredatorPage({ pH, onPHChange }) {
         <div style={{fontSize:9.5,color:"#2a4860",lineHeight:1.7}}>
           <b style={{color:"#5a8aa0"}}>Dixson et al. (2010)</b> — GABA<sub>A</sub> 역전<br/>
           <b style={{color:"#5a8aa0"}}>Nilsson et al. (2012)</b> — 반응 지연<br/>
-          🟡 노란 글로우: 지연 중 (위험 감지했으나 미반응)<br/>
-          🟢 초록 글로우: 회피 중 &nbsp; 🔴 빨간 글로우: 유인 중
+          🟡 지연 중 &nbsp; 🟢 회피 중 &nbsp; 🔴 유인 중 (역전)<br/>
+          ⚪ 회색 글로우: 후각 상실 (셧다운 → 표류)
         </div>
       </div>
     </div>
