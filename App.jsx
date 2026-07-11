@@ -633,8 +633,12 @@ function stepPred(fish, pred, pH) {
   else if(pred.x>W-MARGIN) pvx -= (1-(W-pred.x)/MARGIN)*0.5;
   if(pred.y<MARGIN)      pvy += (1-pred.y/MARGIN)*0.5;
   else if(pred.y>H-MARGIN) pvy -= (1-(H-pred.y)/MARGIN)*0.5;
+  // (b) 종말 스트라이크: 추적 중 표적이 코앞(25px 이내)이면 순간 가속으로 덮침
+  //     (매복 포식자의 종말 공격 동작 — 은신 없이 개활수에서도 자연스러움)
+  const STRIKE_R = 25, STRIKE_SPEED = 1.6;
+  const speedCap = (hunting && minD < STRIKE_R) ? STRIKE_SPEED : PRED_SPEED;
   const pspd=Math.sqrt(pvx*pvx+pvy*pvy)+1e-6;
-  if(pspd>PRED_SPEED){pvx=(pvx/pspd)*PRED_SPEED;pvy=(pvy/pspd)*PRED_SPEED;}
+  if(pspd>speedCap){pvx=(pvx/pspd)*speedCap;pvy=(pvy/pspd)*speedCap;}
   // 포식자는 순환하지 않음 — 화면 안에 부드럽게 머묾 (안전 클램프)
   let pnx=Math.max(8,Math.min(W-8,pred.x+pvx));
   let pny=Math.max(8,Math.min(H-8,pred.y+pvy));
@@ -703,7 +707,8 @@ function stepPred(fish, pred, pH) {
     // (벽 반발 없음 — 화면이 순환 구조)
 
     // 긴박할수록 최대 속도 증가 (burst escape: 평소 1.1 → 최대 2.0)
-    const maxSpd = 1.1 + urgency*0.9;
+    // (a) 셧다운 개체는 C-start 도피를 안 하므로 urgency 속도부스트 제외 (기본 1.1)
+    const maxSpd = isShutdown ? 1.1 : (1.1 + urgency*0.9);
     let vx=f.vx*0.86+ax*0.48,vy=f.vy*0.86+ay*0.48;
     const spd=Math.sqrt(vx*vx+vy*vy)+1e-6;
     if(spd>maxSpd){vx=(vx/spd)*maxSpd;vy=(vy/spd)*maxSpd;}
