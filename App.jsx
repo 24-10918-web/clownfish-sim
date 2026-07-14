@@ -83,59 +83,94 @@ function phLabel(pH) {
 // ══════════════════════════════════════════════════════════════════════════════
 // PAGE 1 — 정착지 선택 시뮬레이션 (Munday 2009 실험 재현)
 // 정착지 3종: 말미잘+Xanthostemon(좋음/유인) · Melaleuca(나쁨/기피→역전) · Grass(중립)
-// pH 8.15: 좋은 곳만 선택  pH 7.8: 나쁜 곳에도 유인  pH 7.6: 무반응 표류
+// pH 8.15: 좋은 곳만 선택  pH 7.8: 나쁜 곳에 역전 유인  pH 7.6: 무반응 표류
 // ══════════════════════════════════════════════════════════════════════════════
 
-// 정착지 정의
-// type: 'good'(말미잘+Xanthostemon) | 'bad'(Melaleuca) | 'neutral'(Grass)
+// 정착지 정의 — 3×2 격자, 각 유형이 서로 다른 행·열에 한 번씩 (라틴방진)
+// 순환 화면(토러스)에서 모든 정착지의 이웃 거리 분포가 동일 → 기하학적 편향 0
+//   (143,125) good     (430,125) bad      (717,125) neutral
+//   (143,375) bad      (430,375) neutral  (717,375) good
 const SITES = [
-  { id:0, x:430, y:250, type:'good',    label:'말미잘+Xanthostemon', emoji:'🌿', color:'#ff8c3a', glow:'rgba(255,140,50,0.22)' },
-  { id:1, x:160, y:140, type:'bad',     label:'Melaleuca',           emoji:'🪵', color:'#8B5E3C', glow:'rgba(139,94,60,0.22)'  },
-  { id:2, x:700, y:140, type:'bad',     label:'Melaleuca',           emoji:'🪵', color:'#8B5E3C', glow:'rgba(139,94,60,0.22)'  },
-  { id:3, x:160, y:380, type:'neutral', label:'Grass',               emoji:'🌾', color:'#6a8a4a', glow:'rgba(106,138,74,0.18)' },
-  { id:4, x:700, y:380, type:'neutral', label:'Grass',               emoji:'🌾', color:'#6a8a4a', glow:'rgba(106,138,74,0.18)' },
+  { id:0, x:143, y:125, type:'good',    label:'말미잘+Xanthostemon', emoji:'🌿', color:'#ff8c3a', glow:'rgba(255,140,50,0.22)' },
+  { id:1, x:430, y:125, type:'bad',     label:'Melaleuca',           emoji:'🪵', color:'#8B5E3C', glow:'rgba(139,94,60,0.22)'  },
+  { id:2, x:717, y:125, type:'neutral', label:'Grass',               emoji:'🌾', color:'#6a8a4a', glow:'rgba(106,138,74,0.18)' },
+  { id:3, x:143, y:375, type:'bad',     label:'Melaleuca',           emoji:'🪵', color:'#8B5E3C', glow:'rgba(139,94,60,0.22)'  },
+  { id:4, x:430, y:375, type:'neutral', label:'Grass',               emoji:'🌾', color:'#6a8a4a', glow:'rgba(106,138,74,0.18)' },
+  { id:5, x:717, y:375, type:'good',    label:'말미잘+Xanthostemon', emoji:'🌿', color:'#ff8c3a', glow:'rgba(255,140,50,0.22)' },
 ];
-const SITE_R = 28;       // 정착 판정 반경
+const SITE_R = 28;        // 정착 판정 반경
 const SITE_SCENT_R = 130; // 냄새 감지 반경
 
-// pH → 각 정착지 유형에 대한 선호도 (Munday 2009 체류시간 비율 기반)
-// good: pH 8.15 → +1.0(강한유인), pH 7.8 → +0.45(약해짐), pH 7.6 → 0(무반응)
-// bad:  pH 8.15 → -1.0(강한기피), pH 7.8 → +0.7(역전유인), pH 7.6 → 0(무반응)
-// neutral: 항상 ≈0
+// ── 순환 화면(토러스) 거리 ──────────────────────────────────────────────────
+// 벽이 없으므로 "중앙/모서리" 구분 자체가 사라짐 → 모든 정착지가 동등
+function wrapD(d, size) {
+  if (d >  size/2) d -= size;
+  if (d < -size/2) d += size;
+  return d;
+}
+
+// ── pH → 각 정착지 유형에 대한 선호도 ────────────────────────────────────────
+// 출처: Munday et al. (2009) Fig.2 — 2채널 선택 수조 체류율
+//   pref = 2*(체류율) - 1   [50%→0, 100%→+1, 0%→-1]
+//
+//   good    : 8.15 → 93%↑ 체류 (+0.90)   7.8 → 유인 유지하나 뚜렷이 약화 (+0.35)   7.6 → 0
+//   bad     : 8.15 → 완전 회피 (-1.0)     7.8 → 80%↑ 체류 = 강한 역전 (+0.85)      7.6 → 0
+//   neutral : 8.15 → 무반응 (+0.05)       7.8 → 선호 증가 (+0.30)                  7.6 → 0
 function getSitePreference(siteType, pH) {
-  const nonR = isNonResponsive(pH);
-  if (nonR) return 0;
+  if (isNonResponsive(pH)) return 0;   // pH <= 7.62: 모든 냄새 무반응 (표류)
+
   if (siteType === 'good') {
-    if (pH >= 8.00) return 1.0;
-    if (pH >= 7.80) { const t=(pH-7.80)/(8.00-7.80); return 1.0*t + 0.55*(1-t); }  // pH7.8: 약해지나 유지
-    if (pH >= 7.60) { const t=(pH-7.60)/(7.80-7.60); return 0.55*t + 0.0*(1-t); }
+    if (pH >= 8.00) return 0.90;
+    if (pH >= 7.80) { const t=(pH-7.80)/(8.00-7.80); return 0.90*t + 0.35*(1-t); }
+    if (pH >= 7.60) { const t=(pH-7.60)/(7.80-7.60); return 0.35*t + 0.00*(1-t); }
     return 0;
   }
+
   if (siteType === 'bad') {
-    if (pH >= 8.00) return -1.0;
-    if (pH >= 7.92) { const t=(pH-7.92)/(8.00-7.92); return -1.0*t + (-0.2)*(1-t); }
-    if (pH >= 7.80) { const t=(pH-7.80)/(7.92-7.80); return -0.2*t + 0.7*(1-t); }
-    if (pH >= 7.60) { const t=(pH-7.60)/(7.80-7.60); return 0.7*t + 0.0*(1-t); }
+    if (pH >= 8.00) return -1.00;
+    // 8.00 → 7.92: 회피가 급격히 무너짐
+    if (pH >= 7.92) { const t=(pH-7.92)/(8.00-7.92); return -1.00*t + (-0.15)*(1-t); }
+    // 7.92 → 7.80: 부호 역전 (GABA-A 반전)
+    if (pH >= 7.80) { const t=(pH-7.80)/(7.92-7.80); return -0.15*t +  0.85*(1-t); }
+    // 7.80 → 7.60: 역전 유인이 후각 마비로 서서히 소멸
+    if (pH >= 7.60) { const t=(pH-7.60)/(7.80-7.60); return  0.85*t +  0.00*(1-t); }
     return 0;
   }
-  // neutral(Grass): 선호/기피 없음. 약한 우연 정착만 가능 (pH 무관)
-  return 0.15;
+
+  // neutral (Megathyrsus / Grass)
+  if (pH >= 8.00) return 0.05;
+  if (pH >= 7.80) { const t=(pH-7.80)/(8.00-7.80); return 0.05*t + 0.30*(1-t); }
+  if (pH >= 7.60) { const t=(pH-7.60)/(7.80-7.60); return 0.30*t + 0.00*(1-t); }
+  return 0;
+}
+
+// ── 정착/이탈 확률 (임계값 → 확률로 전환) ───────────────────────────────────
+// 근거: Munday(2009)의 측정치는 '정착 성공 여부'가 아니라 '냄새 쪽 체류 비율'.
+//       따라서 선호도는 임계값으로 잘라내지 말고, 머무는 시간에 비례시켜야 한다.
+//       정착률 ∝ pref, 이탈률 ∝ (1 - pref) → 평형 점유율 ∝ pref/(1-pref)
+const SETTLE_GAIN = 0.35;   // pref=1.0일 때 프레임당 정착 확률
+const LEAVE_BASE  = 0.020;  // pref=0일 때 프레임당 이탈 확률
+const LEAVE_SAT   = 0.80;   // pref가 이 값 이상이면 이탈 없음
+
+function settleProbOf(pref) {
+  if (pref <= 0.02) return 0;   // 기피/무반응 → 정착 안 함
+  return Math.min(0.5, pref * SETTLE_GAIN);
+}
+function leaveProbOf(pref) {
+  return LEAVE_BASE * Math.max(0, 1 - pref / LEAVE_SAT);
 }
 
 function initSettleFish() {
-  return Array.from({length: INIT_COUNT}, (_, i) => {
-    const angle = (i / INIT_COUNT) * Math.PI * 2;
-    const r = 110 + Math.random() * 50;  // 중앙 말미잘 냄새 범위(130px) 경계 근처
-    return {
-      id: i,
-      x: 430 + Math.cos(angle) * r,
-      y: 250 + Math.sin(angle) * r,
-      vx: (Math.random()-0.5)*0.8, vy: (Math.random()-0.5)*0.8,
-      trail: [], settledAt: null, leaveCooldown: 0,   // null or site.id
-      isShutdown: false, shutPH: 99,  // 후각 상실 상태 + 판정 당시 pH
-      sensitivity: Math.max(0.3, Math.min(1.7, 1.0+(Math.random()+Math.random()-1.0)*0.5)),
-    };
-  });
+  return Array.from({length: INIT_COUNT}, (_, i) => ({
+    id: i,
+    // 화면 전역 무작위 배치 — 특정 정착지에 가까이 태어나는 편향 제거
+    x: Math.random() * W,
+    y: Math.random() * H,
+    vx: (Math.random()-0.5)*0.8, vy: (Math.random()-0.5)*0.8,
+    trail: [], settledAt: null, leaveCooldown: 0,   // null or site.id
+    isShutdown: false, shutPH: 99,                  // 후각 상실 상태 + 판정 당시 pH
+    sensitivity: Math.max(0.3, Math.min(1.7, 1.0+(Math.random()+Math.random()-1.0)*0.5)),
+  }));
 }
 
 function stepSettlement(fish, pH) {
@@ -151,96 +186,84 @@ function stepSettlement(fish, pH) {
     // 셧다운된 개체는 후각 상실 → 표류 (노이즈 큼), 정상은 약한 노이즈
     const noise = isShutdown ? 1.9 : 0.55;
 
-    // 이미 정착한 개체: 해당 정착지 주변에서 느슨하게 배회
+    // ══ 이미 정착한 개체 ══════════════════════════════════════════════════
     if (f.settledAt !== null) {
       const site = SITES[f.settledAt];
-      const dx = site.x - f.x, dy = site.y - f.y;
+      const dx = wrapD(site.x - f.x, W), dy = wrapD(site.y - f.y, H);
       const dist = Math.sqrt(dx*dx + dy*dy) + 1e-6;
-      // 선호도가 떨어지면 이탈 (pH 낮아지면 발현)
-      // 이탈 판정엔 sensitivity 영향 완화 (sqrt) → 민감도 높은 개체도 빠져나옴
-      const basePref = getSitePreference(site.type, pH);
-      const pref = basePref * Math.sqrt(f.sensitivity);
-      // 이탈 임계값 < 정착 임계값(0.35) → 히스테리시스: 한번 정착하면 안정 유지
-      // 정착지가 확실히 나빠질 때(pref<0.22)만 이탈 → 무한 맴돔 방지
-      const keepThresh = site.type === 'neutral' ? 0.06 : 0.22;
-      // 후각 상실(셧다운)이면 즉시 이탈 대상, 그 외엔 선호도 기준
-      if (isShutdown || pref < keepThresh) {
-        // 선호도 낮을수록 이탈 확률 ↑ (최대 35%), 셧다운이면 항상 최대
-        const lowFactor = isShutdown ? 1 : (1 - Math.max(0, pref) / keepThresh);
-        const leaveProb = 0.35 * lowFactor;
-        if (Math.random() < leaveProb) {
-          // 정착지 바깥 방향으로 강하게 밀어냄 + 재정착 쿨다운 부여
-          const outX = -dx/dist, outY = -dy/dist;
-          return {
-            ...f, settledAt: null, leaveCooldown: 140, isShutdown, shutPH,
-            vx: outX * 2.0 + (Math.random()-0.5)*0.6,
-            vy: outY * 2.0 + (Math.random()-0.5)*0.6,
-          };
-        }
+
+      const pref = getSitePreference(site.type, pH) * Math.sqrt(f.sensitivity);
+      // 셧다운이면 후각 상실 → 높은 이탈률, 그 외엔 선호도 기반 확률
+      const leaveProb = isShutdown ? LEAVE_BASE * 3 : leaveProbOf(pref);
+
+      if (Math.random() < leaveProb) {
+        // 이탈 방향은 무작위 (정착지 반대편으로 밀면 화면 중앙 쪽으로 편향됨)
+        const ang = Math.random() * Math.PI * 2;
+        return {
+          ...f, settledAt: null, leaveCooldown: 140, isShutdown, shutPH,
+          vx: Math.cos(ang) * 2.0, vy: Math.sin(ang) * 2.0,
+        };
       }
+
       // 정착지 주변 배회 (반경 25px 안에서)
       let ax = 0, ay = 0;
-      if (dist > 25) { ax += (dx/dist)*0.5; ay += (dy/dist)*0.5; }
+      if (dist > 25)      { ax += (dx/dist)*0.5; ay += (dy/dist)*0.5; }
       else if (dist < 10) { ax -= (dx/dist)*0.3; ay -= (dy/dist)*0.3; }
       const a = Math.random()*Math.PI*2;
       ax += Math.cos(a)*0.5; ay += Math.sin(a)*0.5;
       let vx = f.vx*0.85+ax*0.4, vy = f.vy*0.85+ay*0.4;
       const spd = Math.sqrt(vx*vx+vy*vy)+1e-6;
-      if(spd>0.8){vx=(vx/spd)*0.8;vy=(vy/spd)*0.8;}
-      const nx = Math.max(8, Math.min(W-8, f.x+vx));
-      const ny = Math.max(8, Math.min(H-8, f.y+vy));
+      if (spd > 0.8) { vx=(vx/spd)*0.8; vy=(vy/spd)*0.8; }
+      const nx = (f.x + vx + W) % W;
+      const ny = (f.y + vy + H) % H;
       const trail = [...f.trail, {x:f.x, y:f.y}].slice(-14);
       return {...f, x:nx, y:ny, vx, vy, trail, isShutdown, shutPH};
     }
 
-    // 미정착 개체: 각 정착지 냄새에 반응
+    // ══ 미정착 개체 ═══════════════════════════════════════════════════════
     let ax = 0, ay = 0;
     let nearestSettleSite = null, nearestDist = Infinity;
-    // 재정착 쿨다운 감소 (이탈 직후엔 정착 금지 → 말미잘 밖으로 탈출)
+
+    // 재정착 쿨다운 감소 (이탈 직후엔 정착 금지 → 냄새 범위 밖으로 탈출)
     let cooldown = Math.max(0, (f.leaveCooldown || 0) - 1);
-    // 쿨다운이 끝났어도 아직 가장 가까운 정착지 냄새 범위 안이면 정착 보류
-    // (범위를 완전히 벗어날 때까지 재유인/재정착 방지)
-    if (cooldown === 0) {
+    if (cooldown === 0 && (f.leaveCooldown || 0) > 0) {
+      // 아직 정착지 근처면 잠깐 더 유지 (즉시 재흡수 방지)
       let nearMin = Infinity;
       SITES.forEach(site => {
-        const sdx = f.x - site.x, sdy = f.y - site.y;
-        const sd = Math.sqrt(sdx*sdx + sdy*sdy);
+        const sd = Math.hypot(wrapD(f.x - site.x, W), wrapD(f.y - site.y, H));
         if (sd < nearMin) nearMin = sd;
       });
-      // 직전까지 쿨다운 중이었고 아직 정착지 근처(SITE_R*1.5)면 잠깐 더 유지
-      if ((f.leaveCooldown || 0) > 0 && nearMin < SITE_R * 1.5) {
-        cooldown = 1;
-      }
+      if (nearMin < SITE_R * 1.5) cooldown = 1;
     }
     const canSettle = cooldown === 0;
 
     SITES.forEach(site => {
-      const dx = site.x - f.x, dy = site.y - f.y;
+      const dx = wrapD(site.x - f.x, W), dy = wrapD(site.y - f.y, H);
       const dist = Math.sqrt(dx*dx + dy*dy) + 1e-6;
 
-      // 정착 판정: 반경 안 + 쿨다운 종료
+      // ── 정착 판정 ──
       if (dist < SITE_R && canSettle) {
         if (isShutdown) {
-          // 후각 상실: '선택'은 못 하나, 물리적으로 우연히 머묾
-          // 어느 정착지든 도달 시 무작위 확률(2%)로 멍하니 정착
+          // 후각 상실: '선택'은 못 하나 물리적으로 우연히 머묾
           if (Math.random() < 0.02 && dist < nearestDist) {
             nearestDist = dist; nearestSettleSite = site.id;
           }
         } else {
-          // 정착 판정도 √sensitivity로 (이탈 판정과 동일 척도 → 무한 맴돔 방지)
+          // 하드 임계값 제거 → 선호도 비례 확률
           const pref = getSitePreference(site.type, pH) * Math.sqrt(f.sensitivity);
-          const settleThresh = site.type === 'neutral' ? 0.10 : 0.35;
-          if (pref > settleThresh && dist < nearestDist) {
+          if (Math.random() < settleProbOf(pref) && dist < nearestDist) {
             nearestDist = dist; nearestSettleSite = site.id;
           }
         }
       }
 
-      // 냄새 범위 내: 선호도에 따라 유인/기피 (셧다운이면 유인력 0 → 표류)
-      // pref(선호도)가 곧 유인력 — pH 낮으면 pref 작아져 자연히 약하게 유인됨
+      // ── 냄새 유인/기피 (셧다운이면 유인력 0 → 표류) ──
       if (dist < SITE_SCENT_R && !isShutdown) {
         const pref = getSitePreference(site.type, pH) * f.sensitivity;
-        const strength = pref * 0.85 / (dist * 0.010 + 0.40);
+        let strength = pref * 0.85 / (dist * 0.010 + 0.40);
+        // 정착 반경 안에서는 유인력을 중심으로 갈수록 0으로 감쇠
+        // (감쇠가 없으면 dist→0에서 유인력이 최대 → 오버슛 → 궤도 운동)
+        if (dist < SITE_R) strength *= dist / SITE_R;
         ax += (dx/dist) * strength;
         ay += (dy/dist) * strength;
       }
@@ -250,37 +273,35 @@ function stepSettlement(fish, pH) {
       return { ...f, settledAt: nearestSettleSite, trail: [], leaveCooldown: 0, isShutdown, shutPH };
     }
 
-    // 노이즈
+    // 노이즈 (벽 반발력 없음 — 순환 화면이므로 벽이 존재하지 않음)
     const a = Math.random()*Math.PI*2;
     ax += Math.cos(a)*noise; ay += Math.sin(a)*noise;
-    if(f.x<20)ax+=1.2; if(f.x>W-20)ax-=1.2;
-    if(f.y<20)ay+=1.2; if(f.y>H-20)ay-=1.2;
 
-    // 쿨다운 중: 냄새 유인 무시 + 가장 가까운 정착지 반대 방향으로 능동 추진
-    // (관성만으론 감속돼서 냄새 범위를 못 벗어나 다시 빨려 들어가는 문제 해결)
+    // 쿨다운 중: 냄새 유인 무시 + 가장 가까운 정착지에서 멀어지는 방향으로 추진
     if (cooldown > 0) {
       ax = 0; ay = 0;
-      // 가장 가까운 정착지 찾기
       let cx = 0, cy = 0, cMin = Infinity;
       SITES.forEach(site => {
-        const sdx = f.x - site.x, sdy = f.y - site.y;
+        const sdx = wrapD(f.x - site.x, W), sdy = wrapD(f.y - site.y, H);
         const sd = Math.sqrt(sdx*sdx + sdy*sdy) + 1e-6;
         if (sd < cMin) { cMin = sd; cx = sdx/sd; cy = sdy/sd; }
       });
-      // 정착지에서 멀어지는 방향으로 강하게 추진 (냄새 범위 밖까지)
-      if (cMin < SITE_SCENT_R + 30) {
-        ax = cx * 2.2; ay = cy * 2.2;
-      }
+      if (cMin < SITE_SCENT_R + 30) { ax = cx * 2.2; ay = cy * 2.2; }
     }
-    const damp = cooldown > 0 ? 0.80 : 0.92;  // 쿨다운 중엔 감쇠 줄여 추진력 유지
+
+    const damp  = cooldown > 0 ? 0.80 : 0.92;
     const accel = cooldown > 0 ? 0.55 : 0.35;
     let vx = f.vx*damp + ax*accel, vy = f.vy*damp + ay*accel;
-    const maxSpd = cooldown > 0 ? 1.5 : 1.0;  // 탈출 중엔 속도 상한 ↑
+    const maxSpd = cooldown > 0 ? 1.5 : 1.0;
     const spd = Math.sqrt(vx*vx+vy*vy)+1e-6;
-    if(spd>maxSpd){vx=(vx/spd)*maxSpd;vy=(vy/spd)*maxSpd;}
-    const nx = Math.max(8, Math.min(W-8, f.x+vx));
-    const ny = Math.max(8, Math.min(H-8, f.y+vy));
-    const trail = [...f.trail, {x:f.x, y:f.y}].slice(-16);
+    if (spd > maxSpd) { vx=(vx/spd)*maxSpd; vy=(vy/spd)*maxSpd; }
+
+    // 순환 화면 (wrap-around) — 포식자 회피 페이지와 동일 방식
+    const px = f.x + vx, py = f.y + vy;
+    const nx = (px + W) % W, ny = (py + H) % H;
+    const wrapped = Math.abs(nx - px) > 1 || Math.abs(ny - py) > 1;
+    const trail = wrapped ? [] : [...f.trail, {x:f.x, y:f.y}].slice(-16);
+
     return {...f, x:nx, y:ny, vx, vy, trail, leaveCooldown: cooldown, isShutdown, shutPH};
   });
 }
@@ -307,8 +328,8 @@ function HomingPage({ pH, onPHChange }) {
     // 노출일수 증가 (60fps 가정: 1프레임 = DAYS_PER_SECOND/60 일)
     expRef.current += DAYS_PER_SECOND / 60;
     // 유효 pH로 시뮬레이션
-    const effPH = getEffectivePH(pHRef.current, expRef.current);
-    const next = stepSettlement(fishRef.current, effPH);
+    const ePH = getEffectivePH(pHRef.current, expRef.current);
+    const next = stepSettlement(fishRef.current, ePH);
     fishRef.current = next; tickRef.current += 1;
     if (tickRef.current % 2 === 0) {
       setFish([...next]); setTick(tickRef.current);
@@ -380,11 +401,15 @@ function HomingPage({ pH, onPHChange }) {
               : "rgba(100,120,80,0.04)";
             return (
               <g key={"site"+site.id}>
-                {/* 냄새 범위 */}
-                <circle cx={site.x} cy={site.y} r={SITE_SCENT_R}
-                  fill={fillColor} filter="url(#hblur3)"/>
-                <circle cx={site.x} cy={site.y} r={SITE_SCENT_R}
-                  fill="none" stroke={ringColor} strokeWidth="1.2" strokeDasharray="7 5"/>
+                {/* 냄새 범위 — 순환 화면이므로 상하좌우로 감싸 그림 (3×3 타일) */}
+                {[-W, 0, W].map(ox => [-H, 0, H].map(oy => (
+                  <g key={"sc"+site.id+"_"+ox+"_"+oy}>
+                    <circle cx={site.x+ox} cy={site.y+oy} r={SITE_SCENT_R}
+                      fill={fillColor} filter="url(#hblur3)"/>
+                    <circle cx={site.x+ox} cy={site.y+oy} r={SITE_SCENT_R}
+                      fill="none" stroke={ringColor} strokeWidth="1.2" strokeDasharray="7 5"/>
+                  </g>
+                )))}
                 {/* 정착 구역 */}
                 <circle cx={site.x} cy={site.y} r={SITE_R}
                   fill={site.glow} filter="url(#hblur5)"/>
@@ -425,7 +450,6 @@ function HomingPage({ pH, onPHChange }) {
             const settled = f.settledAt !== null;
             const siteType = settled ? SITES[f.settledAt].type : null;
             const shut = f.isShutdown && !settled;  // 미정착 + 후각상실 = 표류
-            // 정착 여부/셧다운에 따라 색 구분
             const fishColor = shut
               ? "hsl(220,8%,55%)"  // 셧다운: 회색 (후각 상실 표류)
               : settled
@@ -497,9 +521,9 @@ function HomingPage({ pH, onPHChange }) {
         <div style={{background:"rgba(5,16,32,0.95)",border:"1px solid rgba(50,110,170,0.2)",borderRadius:11,padding:"13px 16px"}}>
           <div style={{fontSize:10.5,color:"#3a7898",letterSpacing:1,fontWeight:600,marginBottom:10}}>정착 현황</div>
           {[
-            {label:"🌿 좋은 정착지",n:settledGood, color:"#ff8c3a", desc:"말미잘 + Xanthostemon"},
-            {label:"🪵 나쁜 정착지",n:settledBad,  color:"#a06040", desc:"Melaleuca (독성)"},
-            {label:"🌾 중립 정착지",n:settledNeutral,color:"#6a8a4a",desc:"Grass"},
+            {label:"🌿 좋은 정착지",n:settledGood, color:"#ff8c3a", desc:"말미잘 + Xanthostemon (2곳)"},
+            {label:"🪵 나쁜 정착지",n:settledBad,  color:"#a06040", desc:"Melaleuca 독성 (2곳)"},
+            {label:"🌾 중립 정착지",n:settledNeutral,color:"#6a8a4a",desc:"Grass (2곳)"},
             {label:"🌊 미정착 (표류)",n:unsettled,   color:"#4a7898", desc:"냄새 탐색 중"},
           ].map(({label,n,color,desc})=>(
             <div key={label} style={{marginBottom:8}}>
@@ -515,12 +539,11 @@ function HomingPage({ pH, onPHChange }) {
           ))}
         </div>
 
-        {/* 선호도 현황 */}
+        {/* 선호도 현황 — 각 유형 대표 1곳 (id 0=good, 1=bad, 2=neutral) */}
         <div style={{background:"rgba(5,16,32,0.95)",border:"1px solid rgba(50,110,170,0.2)",borderRadius:11,padding:"12px 16px"}}>
           <div style={{fontSize:10.5,color:"#3a7898",letterSpacing:1,fontWeight:600,marginBottom:8}}>현재 냄새 선호도</div>
-          {SITES.filter((s,i)=>[0,1,3].includes(i)).map(site=>{
-            const pref = getSitePreference(site.type, pH);
-            const prefNorm = (pref+1)/2;
+          {SITES.filter((s,i)=>[0,1,2].includes(i)).map(site=>{
+            const pref = getSitePreference(site.type, effPH);
             const bc = pref>0.1?"#ff8c3a":pref<-0.1?"#a06040":"#6a8a5a";
             return (
               <div key={"pref"+site.id} style={{marginBottom:7}}>
@@ -540,7 +563,7 @@ function HomingPage({ pH, onPHChange }) {
           })}
           <div style={{fontSize:9,color:"#2a4860",marginTop:6,lineHeight:1.7}}>
             <b style={{color:"#5a8aa0"}}>Munday et al. (2009)</b><br/>
-            pH 7.8: Melaleuca 기피→유인 역전<br/>
+            pH 7.8: Melaleuca 기피→유인 역전 (80%↑ 체류)<br/>
             pH 7.6: 모든 냄새 무반응 (표류)
           </div>
         </div>
@@ -633,8 +656,7 @@ function stepPred(fish, pred, pH) {
   else if(pred.x>W-MARGIN) pvx -= (1-(W-pred.x)/MARGIN)*0.5;
   if(pred.y<MARGIN)      pvy += (1-pred.y/MARGIN)*0.5;
   else if(pred.y>H-MARGIN) pvy -= (1-(H-pred.y)/MARGIN)*0.5;
-  // (b) 종말 스트라이크: 추적 중 표적이 코앞(25px 이내)이면 순간 가속으로 덮침
-  //     (매복 포식자의 종말 공격 동작 — 은신 없이 개활수에서도 자연스러움)
+  // 종말 스트라이크: 추적 중 표적이 코앞(25px 이내)이면 순간 가속으로 덮침
   const STRIKE_R = 25, STRIKE_SPEED = 1.6;
   const speedCap = (hunting && minD < STRIKE_R) ? STRIKE_SPEED : PRED_SPEED;
   const pspd=Math.sqrt(pvx*pvx+pvy*pvy)+1e-6;
@@ -658,7 +680,7 @@ function stepPred(fish, pred, pH) {
     let isReversed=f.isReversed||false;  // 역전 상태 (개체에 고정)
     let isShutdown=f.isShutdown||false;  // 후각 상실 상태 (개체에 고정)
     let shutPH=(f.shutPH===undefined)?99:f.shutPH;
-    // ★ pH가 바뀌었을 때 전 개체가 즉시 셧다운/역전 판정 (포식자 위치 무관)
+    // pH가 바뀌었을 때 전 개체가 즉시 셧다운/역전 판정 (포식자 위치 무관)
     if(Math.abs(shutPH - pH) > 0.001){
       const shutP = Math.min(0.98, getShutdownProbability(pH) * Math.sqrt(f.sensitivity));
       isShutdown = Math.random() < shutP;
@@ -685,12 +707,10 @@ function stepPred(fish, pred, pH) {
 
     let ax=0,ay=0;
     // ── 긴박도(urgency): 포식자가 가까울수록 0→1로 급증 (C-start burst escape) ──
-    // 냄새 반경 끝(85px)에선 거의 0, 코앞(20px 이하)에선 1에 수렴
     const urgency = inScent ? Math.max(0, Math.min(1, (SCENT_R - distP) / (SCENT_R - 25))) : 0;
     if(canReact) {
       const ux=toPx/distP,uy=toPy/distP;  // 포식자 → 나 방향
       // 역전: 포식자로 직진(+) / 정상: 정반대로 회피(-)
-      // (화면이 순환 구조라 벽이 없으므로 단순 회피로 충분)
       const dir = isReversed ? +1 : -1;
       const mag = isReversed ? f.sensitivity : 1/Math.max(0.5,f.sensitivity);
       const burst = 1 + urgency*urgency*5;  // 가까울수록 폭발적 도주
@@ -707,7 +727,6 @@ function stepPred(fish, pred, pH) {
     // (벽 반발 없음 — 화면이 순환 구조)
 
     // 긴박할수록 최대 속도 증가 (burst escape: 평소 1.1 → 최대 2.0)
-    // (a) 셧다운 개체는 C-start 도피를 안 하므로 urgency 속도부스트 제외 (기본 1.1)
     const maxSpd = isShutdown ? 1.1 : (1.1 + urgency*0.9);
     let vx=f.vx*0.86+ax*0.48,vy=f.vy*0.86+ay*0.48;
     const spd=Math.sqrt(vx*vx+vy*vy)+1e-6;
@@ -744,8 +763,8 @@ function PredatorPage({ pH, onPHChange }) {
       prevPHRef.current = pHRef.current; expRef.current = 0;
     }
     expRef.current += DAYS_PER_SECOND / 60;
-    const effPH = getEffectivePH(pHRef.current, expRef.current);
-    const res=stepPred(fishRef.current,predRef.current,effPH);
+    const ePH = getEffectivePH(pHRef.current, expRef.current);
+    const res=stepPred(fishRef.current,predRef.current,ePH);
     fishRef.current=res.fish; predRef.current=res.pred; tickRef.current+=1;
     const aliveN=res.fish.filter(f=>f.alive).length;
     if(aliveN===0&&!goRef.current){goRef.current=true;setGameOver(true);}
@@ -861,8 +880,6 @@ function PredatorPage({ pH, onPHChange }) {
             const hue=15+(fi%10)*11;
             const fAngle=Math.atan2(f.vy,f.vx)*180/Math.PI;
             const op=f.alive?1:(f.deathFlash/22)*0.7;
-            // 셧다운 개체는 포식자 위치 무관하게 항상 회색 글로우 (후각 상실 표류)
-            // 그 외(정상/역전/지연)는 냄새 범위 안에서만 글로우
             const glowFill = f.alive && f.isShutdown
               ? "rgba(150,150,160,0.40)"
               : (f.alive && f.inScent
@@ -871,8 +888,6 @@ function PredatorPage({ pH, onPHChange }) {
                 :"rgba(60,200,110,0.45)")
                 :"none");
             const showGlow = f.alive && (f.isShutdown || f.inScent);
-            // 몸통 색도 상태별로 구분 (글로우와 함께 상태가 또렷이 보이게)
-            // 셧다운=회색 / 역전(반응중)=빨강 / 그 외=기본 주황
             const bodyMain = f.isShutdown ? "hsl(220,8%,58%)"
               : (f.inScent && f.isReversed && f.latencyCounter===0) ? "hsl(2,75%,58%)"
               : "hsl("+hue+",78%,56%)";
@@ -1118,7 +1133,7 @@ export default function App() {
       {/* 하단 범례 */}
       <div style={{marginTop:18,fontSize:10,color:"#1c3848",textAlign:"center",lineHeight:1.8}}>
         {tab===0
-          ?"귀소 모델: 말미잘 냄새 화학주성 · pH 의존 귀소 강도 · 개체별 감수성 편차 · Munday et al. (2009) PNAS"
+          ?"귀소 모델: 3×2 대칭 배치 · 순환 화면(토러스) · 선호도 비례 확률 정착 · Munday et al. (2009) PNAS"
           :"포식자 반응 모델: GABAA 역전 (Dixson 2010) · 반응 지연 latency (Nilsson 2012) · 개체별 감수성 편차"
         }
       </div>
