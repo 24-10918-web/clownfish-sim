@@ -148,9 +148,9 @@ function getSitePreference(siteType, pH) {
 // 근거: Munday(2009)의 측정치는 '정착 성공 여부'가 아니라 '냄새 쪽 체류 비율'.
 //       따라서 선호도는 임계값으로 잘라내지 말고, 머무는 시간에 비례시켜야 한다.
 //       정착률 ∝ pref, 이탈률 ∝ (1 - pref) → 평형 점유율 ∝ pref/(1-pref)
-const SETTLE_GAIN = 0.35;   // pref=1.0일 때 프레임당 정착 확률
-const LEAVE_BASE  = 0.020;  // pref=0일 때 프레임당 이탈 확률
-const LEAVE_SAT   = 0.80;   // pref가 이 값 이상이면 이탈 없음
+const SETTLE_GAIN = 0.35;    // pref=1.0일 때 프레임당 정착 확률
+const LEAVE_BASE  = 0.0025;  // pref=0일 때 프레임당 이탈 확률 (60fps 기준 ≈6.7초)
+const LEAVE_SAT   = 0.85;    // pref가 이 값 이상이면 이탈 없음 (영구 정착)
 
 function settleProbOf(pref) {
   if (pref <= 0.02) return 0;   // 기피/무반응 → 정착 안 함
@@ -194,8 +194,7 @@ function stepSettlement(fish, pH) {
 
       const pref = getSitePreference(site.type, pH) * Math.sqrt(f.sensitivity);
       // 셧다운이면 후각 상실 → 높은 이탈률, 그 외엔 선호도 기반 확률
-      const leaveProb = isShutdown ? LEAVE_BASE * 3 : leaveProbOf(pref);
-
+  const leaveProb = isShutdown ? 0.020 : leaveProbOf(pref);
       if (Math.random() < leaveProb) {
         // 이탈 방향은 무작위 (정착지 반대편으로 밀면 화면 중앙 쪽으로 편향됨)
         const ang = Math.random() * Math.PI * 2;
